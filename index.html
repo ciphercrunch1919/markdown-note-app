@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Obsidian Clone</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    </head>
+    <body>
+    <div class="app-container">
+        <!-- Top Bar -->
+        <div class="top-bar">
+        <div class="window-controls">
+            <button class="window-control close"></button>
+            <button class="window-control minimize"></button>
+            <button class="window-control expand"></button>
+        </div>
+        <div class="top-bar-buttons">
+            <button class="top-bar-button"><i class="fas fa-file"></i> File</button>
+            <button class="top-bar-button"><i class="fas fa-search"></i> Search</button>
+            <button class="top-bar-button"><i class="fas fa-bookmark"></i> Bookmark</button>
+        </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+        <!-- Top Icons -->
+        <div class="sidebar-icons">
+            <button class="sidebar-icon" title="Search"><i class="fas fa-search"></i></button>
+            <button class="sidebar-icon" title="Graph View"><i class="fas fa-project-diagram"></i></button>
+            <button class="sidebar-icon" title="Command Palette"><i class="fas fa-terminal"></i></button>
+        </div>
+
+        <!-- Folder and Note Management -->
+        <div class="sidebar-section">
+            <div class="sidebar-actions">
+            <button class="sidebar-action"><i class="fas fa-plus"></i> Create Note</button>
+            <button class="sidebar-action"><i class="fas fa-folder-plus"></i> Create Folder</button>
+            <button class="sidebar-action"><i class="fas fa-expand"></i> Expand All</button>
+            </div>
+            <div class="folder-structure">
+            <ul id="folder-list"></ul>
+            </div>
+        </div>
+
+        <!-- Vault Switcher -->
+        <div class="vault-switcher">
+            <select id="vault-select">
+            <option value="vault1">Vault 1</option>
+            <option value="vault2">Vault 2</option>
+            </select>
+        </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab-button active" data-tab="editor">Editor</button>
+            <button class="tab-button" data-tab="mindmap">Mind Map</button>
+        </div>
+
+        <!-- Split View -->
+        <div class="split-view">
+            <textarea id="note-content" placeholder="Write your note here..."></textarea>
+            <div id="mindmap-container"></div>
+        </div>
+        </div>
+    </div>
+
+    <script src="main.ts"></script>
+</body>
+</html>
