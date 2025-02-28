@@ -19,28 +19,30 @@ impl Note {
     pub fn create_note(vault_path: &str, title: &str, content: &str) -> io::Result<()> {
         let safe_title = string_utils::sanitize_filename(title);
         let clean_content = string_utils::normalize_whitespace(content);
+    
+        println!("🛠️ Debug: Safe title - '{}'", safe_title);
+        println!("🛠️ Debug: Clean content - '{}'", clean_content);
 
-        // Ensure the vault directory exists
         if !Path::new(vault_path).exists() {
+            println!("📂 Creating vault directory: {}", vault_path);
             file_operations::create_directory(vault_path)?;
         }
-
+    
         let note_path = format!("{}/{}.md", vault_path, safe_title);
         println!("📝 Creating note at: {}", note_path);
-
-        // Write the sanitized content to the file
+    
         file_operations::write_to_file(&note_path, &clean_content)?;
-
-        // Verify that the file was created and is not empty
+    
         if !Path::new(&note_path).exists() {
             return Err(Error::new(ErrorKind::Other, "❌ File was not created"));
         }
-
+    
         let verify_content = file_operations::read_from_file(&note_path)?;
         if verify_content.is_empty() {
             return Err(Error::new(ErrorKind::Other, "❌ File was created but is empty"));
         }
 
+        println!("✅ Note successfully created: {}", note_path);
         Ok(())
     }
 
@@ -48,12 +50,16 @@ impl Note {
     pub fn read_note(vault_path: &str, title: &str) -> io::Result<String> {
         let safe_title = string_utils::sanitize_filename(title);
         let note_path = format!("{}/{}.md", vault_path, safe_title);
+        
+        println!("📖 Debug: Attempting to read note from {}", note_path);
 
         if !Path::new(&note_path).exists() {
             return Err(Error::new(ErrorKind::NotFound, "❌ Note file does not exist"));
         }
 
-        file_operations::read_from_file(&note_path)
+        let content = file_operations::read_from_file(&note_path)?;
+        println!("📖 Debug: Read content - '{}'", content);
+        Ok(content)
     }
 
     // Deletes a Markdown note.
@@ -62,6 +68,7 @@ impl Note {
         let note_path = format!("{}/{}.md", vault_path, safe_title);
 
         if Path::new(&note_path).exists() {
+            println!("🗑️ Deleting note: {}", note_path);
             file_operations::delete_file(&note_path)?;
         }
 
@@ -69,6 +76,7 @@ impl Note {
             return Err(Error::new(ErrorKind::Other, "❌ File was not deleted"));
         }
 
+        println!("✅ Note successfully deleted: {}", note_path);
         Ok(())
     }
 
@@ -91,9 +99,13 @@ impl Note {
     // Extracts wikilinks ([[Link]]) from a note.
     pub fn extract_links(content: &str) -> Vec<String> {
         let re = Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
-        re.captures_iter(content)
-            .map(|cap| cap[1].to_string())
-            .collect()
+        let matches: Vec<String> = re
+            .captures_iter(content)
+            .map(|cap| cap[1].trim().to_string()) // Trim whitespace
+            .collect();
+        
+        println!("🔗 Debug: Extracted links - {:?}", matches);
+        matches
     }
 
     // Indexes a note in the vault.
@@ -105,6 +117,8 @@ impl Note {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| tantivy::TantivyError::InvalidArgument("Invalid vault path".into()))?;
+
+        println!("🔍 Debug: Indexing note '{}' in vault '{}'", title, vault_name);
 
         let vault = Vault::create_vault(vault_name, vault_path)?;
         vault.index_note(title, &content)
