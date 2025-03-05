@@ -10,6 +10,14 @@ pub fn create_directory(path: &str) -> io::Result<()> {
     Ok(())
 }
 
+// Deletes a directory and all its contents if it exists.
+pub fn delete_directory(path: &str) -> io::Result<()> {
+    if Path::new(path).exists() {
+        fs::remove_dir_all(path)?;
+    }
+    Ok(())
+}
+
 // Writes content to a file, creating it if necessary.
 pub fn write_to_file(path: &str, content: &str) -> io::Result<()> {
     let mut file = File::create(path)?;
@@ -55,14 +63,13 @@ pub fn list_files_with_extension(dir: &str, extension: &str) -> io::Result<Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn test_create_directory() {
         let test_dir = "test_dir";
         create_directory(test_dir).unwrap();
         assert!(Path::new(test_dir).exists());
-        fs::remove_dir_all(test_dir).unwrap();
+        delete_directory(test_dir).unwrap();
     }
 
     #[test]
@@ -91,6 +98,16 @@ mod tests {
         let md_files = list_files_with_extension(test_dir, "md").unwrap();
         assert_eq!(md_files, vec!["note1.md"]);
 
-        fs::remove_dir_all(test_dir).unwrap();
+        delete_directory(test_dir).unwrap();
+    }
+
+    #[test]
+    fn test_delete_directory() {
+        let test_dir = "test_delete_dir";
+        create_directory(test_dir).unwrap();
+        assert!(Path::new(test_dir).exists());
+
+        delete_directory(test_dir).unwrap();
+        assert!(!Path::new(test_dir).exists());
     }
 }

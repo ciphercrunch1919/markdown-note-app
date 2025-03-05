@@ -27,4 +27,5 @@ regex = "1.11.1"
 tantivy = "0.22.0"
 petgraph = "0.7.1"
 walkdir = "2.5.0"
+ammonia = "4.0.0"
 
