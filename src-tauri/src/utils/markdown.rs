@@ -26,25 +26,17 @@ pub fn extract_links(content: &str) -> Vec<String> {
         .collect()
 }
 
-// Parses a Markdown file and returns its content.
-pub fn parse_markdown_file(file_path: &str) -> Result<String, String> {
-    std::fs::read_to_string(file_path)
-        .map_err(|e| format!("Error reading file '{}': {}", file_path, e))
-}
-
 // Extracts text-only content from Markdown (without formatting).
 pub fn extract_plain_text(content: &str) -> String {
     let parser = Parser::new(content);
     let mut plain_text = String::new();
-    let mut in_header = false;
 
     for event in parser {
         match event {
-            Event::Start(Tag::Heading { level, .. }) => {
-                in_header = true;
+            Event::Start(Tag::Heading { level: _, .. }) => {
+                // No need to track in_header
             }
-            Event::End(TagEnd::Heading(level)) => {
-                in_header = false;
+            Event::End(TagEnd::Heading(_)) => {
                 plain_text.push('\n'); // Add newline after header
             }
             Event::Text(text) => plain_text.push_str(&text),
@@ -86,17 +78,5 @@ mod tests {
         let md_content = "# Title\nThis is **bold**.";
         let plain_text = extract_plain_text(md_content);
         assert_eq!(plain_text, "Title\nThis is bold.");
-    }
-
-    #[test]
-    fn test_parse_markdown_file() {
-        let file_path = "test.md";
-        let content = "# Test File\nThis is a test.";
-        std::fs::write(file_path, content).unwrap();
-
-        let parsed_content = parse_markdown_file(file_path).unwrap();
-        assert_eq!(parsed_content, content);
-
-        std::fs::remove_file(file_path).unwrap();
     }
 }

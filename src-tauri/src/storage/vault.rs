@@ -1,14 +1,38 @@
-use tantivy::{Index, schema::{Schema, TextOptions, TEXT}, doc, Result as TantivyResult};
+use serde::{Serialize, Deserialize};
+use tantivy::{doc, schema::{Schema, STORED, TEXT}, Index, Result as TantivyResult};
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::utils::{file_operations, string_utils};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Vault {
     pub name: String,
     pub path: String,
-    index: Index,
+    #[serde(skip)]
+    index: Index, // Exclude `index` from serialization
+}
+
+impl<'de> Deserialize<'de> for Vault {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct VaultData {
+            name: String,
+            path: String,
+        }
+
+        let data = VaultData::deserialize(deserializer)?;
+        let index = Index::open_in_dir(&data.path).map_err(serde::de::Error::custom)?;
+
+        Ok(Vault {
+            name: data.name,
+            path: data.path,
+            index,
+        })
+    }
 }
 
 impl PartialEq for Vault {
@@ -22,27 +46,34 @@ impl Vault {
     pub fn create_vault(name: &str, base_path: &str) -> TantivyResult<Self> {
         let safe_name = string_utils::sanitize_filename(name);
         let vault_path = format!("{}/{}", base_path, safe_name);
-    
+
         // Ensure base directory exists
         if !Path::new(base_path).exists() {
             println!("📂 Creating base directory: {}", base_path);
             file_operations::create_directory(base_path).map_err(|e| tantivy::TantivyError::IoError(Arc::new(e)))?;
         }
-    
+
         // Ensure vault directory exists
         if !Path::new(&vault_path).exists() {
             println!("📂 Creating vault directory: {}", vault_path);
             file_operations::create_directory(&vault_path).map_err(|e| tantivy::TantivyError::IoError(Arc::new(e)))?;
         }
-    
+
         // Verify the directory structure
         println!("🛠️ Debug: Vault directory structure - {}", vault_path);
         let schema = Self::create_schema();
-    
+
+        // Clean up any existing index
+        let index_path = format!("{}/{}", vault_path, "tantivy");
+        if Path::new(&index_path).exists() {
+            println!("🧹 Cleaning up existing index directory: {}", index_path);
+            file_operations::delete_directory(&index_path).map_err(|e| tantivy::TantivyError::IoError(Arc::new(e)))?;
+        }
+
         // Create the Tantivy index
         println!("🛠️ Debug: Creating Tantivy index in directory: {}", vault_path);
         let index = Index::create_in_dir(&vault_path, schema.clone())?;
-    
+
         println!("✅ Vault successfully created: {}", vault_path);
         Ok(Self {
             name: safe_name,
@@ -71,8 +102,8 @@ impl Vault {
     // Creates the Tantivy schema.
     fn create_schema() -> Schema {
         let mut schema_builder = Schema::builder();
-        schema_builder.add_text_field("title", TextOptions::default().set_stored());
-        schema_builder.add_text_field("content", TEXT);
+        schema_builder.add_text_field("title", TEXT | STORED); // Ensure "title" is indexed and stored
+        schema_builder.add_text_field("content", TEXT); // "content" is indexed by default
         schema_builder.build()
     }
 
@@ -93,26 +124,50 @@ impl Vault {
         index_writer.commit()?;
         Ok(())
     }
+
+    // Deletes indexed note from Tantivy.
+    pub fn delete_note_index(&self, title: &str) -> TantivyResult<()> {
+        let safe_title = string_utils::sanitize_filename(title);
+        let mut index_writer: tantivy::IndexWriter = self.index.writer(50_000_000)?;
+        let term = tantivy::Term::from_field_text(self.index.schema().get_field("title").unwrap(), &safe_title);
+        index_writer.delete_term(term);
+        index_writer.commit()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use tantivy::{collector::TopDocs, query::TermQuery};
+
     use crate::storage::note::Note;
+
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
 
     const TEST_BASE_PATH: &str = "test_vaults";
     const TEST_VAULT: &str = "TestVault";
 
+    static VAULT: Mutex<OnceLock<Vault>> = Mutex::new(OnceLock::new());
+
     fn setup() {
+        // Disable the base path for tests
+        file_operations::set_base_path(None);
+
         // Clean up any existing test directory
         cleanup();
-    
+
         // Create the test directory
         file_operations::create_directory(TEST_BASE_PATH).unwrap();
+
+        // Create the Vault instance and store it in the static variable
+        let vault = Vault::create_vault(TEST_VAULT, TEST_BASE_PATH).unwrap();
+        VAULT.lock().unwrap().set(vault).unwrap();
     }
-    
+
     fn cleanup() {
         if Path::new(TEST_BASE_PATH).exists() {
+            println!("🧹 Cleaning up test directory: {}", TEST_BASE_PATH);
             file_operations::delete_directory(TEST_BASE_PATH).unwrap();
         }
     }
@@ -121,7 +176,9 @@ mod tests {
     fn test_create_vault() {
         setup();
 
-        let vault = Vault::create_vault(TEST_VAULT, TEST_BASE_PATH).unwrap();
+        // Get the Vault instance from the static variable
+        let binding = VAULT.lock().unwrap();
+        let vault = binding.get().unwrap();
 
         // Verify the vault name and path
         assert_eq!(vault.name, TEST_VAULT);
@@ -135,16 +192,16 @@ mod tests {
         let index_path = format!("{}/{}", vault.path, "tantivy");
         assert!(Path::new(&index_path).exists(), "❌ Tantivy index directory should exist");
 
-        cleanup();
+        cleanup(); // Ensure cleanup is called at the end of the test
     }
 
     #[test]
     fn test_delete_vault() {
         setup();
 
-        // Create a vault
-        let vault = Vault::create_vault(TEST_VAULT, TEST_BASE_PATH).unwrap();
-        let vault_path = vault.path.clone();
+        let binding = VAULT.lock().unwrap();
+        let vault = binding.get().unwrap();
+        let vault_path = &vault.path;
 
         // Ensure the vault directory exists
         assert!(Path::new(&vault_path).exists());
@@ -163,18 +220,74 @@ mod tests {
     fn test_index_note_in_vault() {
         setup();
 
-        // Create the vault
-        let vault = Vault::create_vault(TEST_VAULT, TEST_BASE_PATH).unwrap();
-        let vault_path = &vault.path;
+        // Get the Vault instance from the static variable
+        let binding = VAULT.lock().unwrap();
+        let vault = binding.get().unwrap();
+        let _vault_path = &vault.path;
 
         // Create a note
         let content = "This is a test note.";
-        let result = Note::create_note(vault_path, "TestNote", content);
+        let note = Note::new("TestNote", content);
+        let result = Note::create_note(&note, vault);
         assert!(result.is_ok(), "❌ Creating note should succeed");
 
         // Index the note
-        let indexed = Note::index_note_in_vault(vault_path, "TestNote");
+        let indexed = vault.index_note("TestNote", content);
         assert!(indexed.is_ok(), "❌ Indexing note should succeed");
+
+        // Verify the note is indexed
+        let schema = vault.index.schema();
+        let title_field = schema.get_field("title").unwrap();
+        let reader = vault.index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        let term = TermQuery::new(
+            tantivy::Term::from_field_text(title_field, "TestNote"),
+            tantivy::schema::IndexRecordOption::Basic,
+        );
+
+        let top_docs = searcher.search(&term, &TopDocs::with_limit(1)).unwrap();
+        assert_eq!(top_docs.len(), 1, "❌ Note should be indexed");
+
+        cleanup();
+    }
+
+    #[test]
+    fn test_delete_note_index() {
+        setup();
+
+        // Get the Vault instance from the static variable
+        let binding = VAULT.lock().unwrap();
+        let vault = binding.get().unwrap();
+        let _vault_path = &vault.path;
+
+        // Create and index a note
+        let title = "TestNote";
+        let content = "This is a test note.";
+        let note = Note::new(title, content);
+        Note::create_note(&note, vault).unwrap();
+        vault.index_note(title, content).unwrap();
+
+        // Verify the note is indexed
+        let schema = vault.index.schema();
+        let title_field = schema.get_field("title").unwrap();
+        let reader = vault.index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        let term = TermQuery::new(
+            tantivy::Term::from_field_text(title_field, title),
+            tantivy::schema::IndexRecordOption::Basic,
+        );
+
+        let top_docs = searcher.search(&term, &TopDocs::with_limit(1)).unwrap();
+        assert_eq!(top_docs.len(), 1, "❌ Note should be indexed");
+
+        // Delete the note from the index
+        vault.delete_note_index(title).unwrap();
+
+        // Verify the note is no longer indexed
+        let top_docs_after_delete = searcher.search(&term, &TopDocs::with_limit(1)).unwrap();
+        assert_eq!(top_docs_after_delete.len(), 0, "❌ Note should be deleted from the index");
 
         cleanup();
     }

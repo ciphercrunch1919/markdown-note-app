@@ -2,9 +2,9 @@ use serde::{Serialize, Deserialize};
 use std::path::Path;
 use std::io::{self, Error, ErrorKind};
 use tantivy::Result as TantivyResult;
-use regex::Regex;
 use std::fs;
 use std::sync::Arc;
+use nanoid::nanoid;
 
 use crate::utils::{file_operations, string_utils, markdown};
 use crate::storage::vault::Vault;
@@ -16,56 +16,86 @@ pub struct Note {
 }
 
 impl Note {
-    // Creates a new Markdown note.
-    pub fn create_note(vault_path: &str, title: &str, content: &str) -> io::Result<()> {
-        let safe_title = string_utils::sanitize_filename(title);
-        let clean_content = string_utils::normalize_whitespace(content);
-    
-        println!("🛠️ Debug: Safe title - '{}'", safe_title);
-        println!("🛠️ Debug: Clean content - '{}'", clean_content);
-    
-        // Check if the vault directory exists
-        if !Path::new(vault_path).exists() {
-            return Err(Error::new(
-                ErrorKind::NotFound,
-                format!("❌ Vault directory does not exist: {}", vault_path),
-            ));
+    #[allow(dead_code)]
+    pub fn new(title: &str, content: &str) -> Self {
+        Self {
+            title: title.to_string(),
+            content: content.to_string(),
         }
-    
-        let note_path = format!("{}/{}.md", vault_path, safe_title);
+    }
+
+    // Generates a file name from the first three words of the content.
+    pub fn generate_file_name(content: &str) -> String {
+        let words: Vec<&str> = content.split_whitespace().collect();
+        let file_name = if words.len() >= 3 {
+            format!("{}-{}-{}", words[0], words[1], words[2])
+        } else {
+            content.to_string()
+        };
+        string_utils::sanitize_filename(&file_name)
+    }
+
+    // Creates a new Markdown note.
+    pub fn create_note(&self, vault: &Vault) -> io::Result<()> {
+        // Generate a default title if the provided title is empty
+        let title = if self.title.trim().is_empty() {
+            let id = nanoid!(); // Generates a unique ID like "abc123xyz"
+            format!("untitled_{}", id)
+        } else {
+            self.title.clone()
+        };
+
+        // Generate the file name from the first three words of the content
+        let file_name = Self::generate_file_name(&self.content);
+        let clean_content = string_utils::normalize_whitespace(&self.content);
+
+        println!("🛠️ Debug: Title - '{}'", title);
+        println!("🛠️ Debug: File name - '{}'", file_name);
+        println!("🛠️ Debug: Clean content - '{}'", clean_content);
+
+        // Ensure the vault directory exists
+        if !Path::new(&vault.path).exists() {
+            println!("📂 Creating vault directory: {}", vault.path);
+            file_operations::create_directory(&vault.path)?;
+        }
+
+        let note_path = format!("{}/{}.md", vault.path, file_name);
         println!("📝 Creating note at: {}", note_path);
-    
+
         // Write the note content to the file
         file_operations::write_to_file(&note_path, &clean_content)?;
-    
+
         // Verify that the file was created
         if !Path::new(&note_path).exists() {
             return Err(Error::new(
                 ErrorKind::Other,
                 format!("❌ File was not created: {}", note_path),
-            ));
+                )
+            );
         }
-    
+
         // Verify that the file is not empty
         let verify_content = file_operations::read_from_file(&note_path)?;
         println!("🛠️ Debug: Verify content - '{}'", verify_content);
-    
+
         if verify_content.is_empty() {
             return Err(Error::new(
                 ErrorKind::Other,
                 "❌ File was created but is empty",
             ));
         }
-    
+
         println!("✅ Note successfully created: {}", note_path);
+        let _ = self.index_note_in_vault(vault);
+
         Ok(())
     }
 
     // Reads a Markdown note as raw content.
-    pub fn read_note(vault_path: &str, title: &str) -> io::Result<String> {
-        let safe_title = string_utils::sanitize_filename(title);
-        let note_path = format!("{}/{}.md", vault_path, safe_title);
-        
+    pub fn read_note(vault: &Vault, file_name: &str) -> io::Result<String> {
+        let safe_file_name = string_utils::sanitize_filename(file_name);
+        let note_path = format!("{}/{}.md", vault.path, safe_file_name);
+
         println!("📖 Debug: Attempting to read note from {}", note_path);
 
         if !Path::new(&note_path).exists() {
@@ -78,27 +108,32 @@ impl Note {
     }
 
     // Deletes a Markdown note.
-    pub fn delete_note(vault_path: &str, title: &str) -> io::Result<()> {
-        let safe_title = string_utils::sanitize_filename(title);
-        let note_path = format!("{}/{}.md", vault_path, safe_title);
-    
+    pub fn delete_note(&self, vault: &Vault) -> io::Result<()> {
+        let file_name = Self::generate_file_name(&self.content);
+        let safe_file_name = string_utils::sanitize_filename(&file_name);
+        let note_path = format!("{}/{}.md", vault.path, safe_file_name);
+
         if Path::new(&note_path).exists() {
             println!("🗑️ Deleting note: {}", note_path);
             file_operations::delete_file(&note_path)?;
         }
-    
+
         if Path::new(&note_path).exists() {
             println!("❌ File still exists after deletion: {}", note_path);
             return Err(Error::new(ErrorKind::Other, "❌ File was not deleted"));
         }
-    
+
+        // Delete the note from the Tantivy index
+        vault.delete_note_index(&safe_file_name)
+            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
+
         println!("✅ Note successfully deleted: {}", note_path);
         Ok(())
     }
 
     // Lists all notes in a vault.
-    pub fn list_notes(vault_path: &str) -> io::Result<Vec<String>> {
-        let paths = fs::read_dir(vault_path)?;
+    pub fn list_notes(vault: &Vault) -> io::Result<Vec<String>> {
+        let paths = fs::read_dir(&vault.path)?;
         Ok(paths
             .filter_map(|entry| entry.ok().map(|e| e.file_name().into_string().ok()).flatten())
             .filter(|name| name.ends_with(".md"))
@@ -107,55 +142,76 @@ impl Note {
     }
 
     // Converts a Markdown note into HTML.
-    pub fn render_html(vault_path: &str, title: &str) -> std::result::Result<String, String> {
-        let content = Self::read_note(vault_path, title).map_err(|e| e.to_string())?;
+    pub fn render_html(&self, vault: &Vault) -> Result<String, String> {
+        let file_name = Self::generate_file_name(&self.content);
+        let content = Self::read_note(vault, &file_name).map_err(|e| e.to_string())?;
         Ok(markdown::render_markdown(&content))
     }
 
-    // Extracts wikilinks ([[Link]]) from a note.
-    pub fn extract_links(content: &str) -> Vec<String> {
-        let re = Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
-        let matches: Vec<String> = re
-            .captures_iter(content)
-            .map(|cap| cap[1].trim().to_string()) // Trim whitespace
-            .collect();
-        
-        println!("🔗 Debug: Extracted links - {:?}", matches);
-        matches
+    // Indexes a note in the vault.
+    pub fn index_note_in_vault(&self, vault: &Vault) -> TantivyResult<()> {
+        let file_name = Self::generate_file_name(&self.content);
+        let content = Self::read_note(vault, &file_name)
+            .map_err(|e| tantivy::TantivyError::IoError(Arc::new(e)))?;
+
+        println!("🔍 Debug: Indexing note '{}' in vault '{}'", file_name, vault.name);
+
+        vault.index_note(&file_name, &content)
     }
 
-    // Indexes a note in the vault.
-    pub fn index_note_in_vault(vault_path: &str, title: &str) -> TantivyResult<()> {
-        let content = Note::read_note(vault_path, title)
-            .map_err(|e| tantivy::TantivyError::IoError(Arc::new(e)))?;
-    
-        let vault_name = std::path::Path::new(vault_path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| tantivy::TantivyError::InvalidArgument("Invalid vault path".into()))?;
-    
-        println!("🔍 Debug: Indexing note '{}' in vault '{}'", title, vault_name);
-    
-        let vault = Vault::create_vault(vault_name, vault_path)?;
-        vault.index_note(title, &content)
+    #[allow(dead_code)]
+    pub fn rename_note(&mut self, vault: &Vault, new_title: &str) -> io::Result<()> {
+        // Generate the old file name from the first three words of the content
+        let old_file_name = Self::generate_file_name(&self.content);
+        let old_file_path = format!("{}/{}.md", vault.path, old_file_name);
+
+        // Update the title
+        self.title = new_title.to_string();
+
+        // Generate the new file name from the first three words of the content
+        let new_file_name = Self::generate_file_name(&self.content);
+        let new_file_path = format!("{}/{}.md", vault.path, new_file_name);
+
+        // Rename the file
+        file_operations::rename_file(&old_file_path, &new_file_path)?;
+
+        // Update the index (if applicable)
+        vault.delete_note_index(&old_file_name)
+            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
+        vault.index_note(&new_file_name, &self.content)
+            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
+
+        println!("✅ Note successfully renamed to: {}", new_file_name);
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, OnceLock};
+
     use super::*;
 
     const TEST_VAULT: &str = "test_notes";
     const TEST_NOTE: &str = "test_note";
 
+    static VAULT: Mutex<OnceLock<Vault>> = Mutex::new(OnceLock::new());
+
     fn setup() {
+        // Disable the base path for tests
+        file_operations::set_base_path(None);
+
         // Clean up any existing test directory
         cleanup();
-    
+
         // Create the test directory
         file_operations::create_directory(TEST_VAULT).unwrap();
+
+        // Create the Vault instance and store it in the static variable
+        let vault = Vault::create_vault(TEST_VAULT, TEST_VAULT).unwrap();
+        VAULT.lock().unwrap().get_or_init(|| vault.into());
     }
-    
+
     fn cleanup() {
         if Path::new(TEST_VAULT).exists() {
             file_operations::delete_directory(TEST_VAULT).unwrap();
@@ -170,18 +226,25 @@ mod tests {
         let expected_clean_content = "This is a test note.";
 
         // Create the note
-        let result = Note::create_note(TEST_VAULT, TEST_NOTE, content);
+        let note = Note {
+            title: TEST_NOTE.to_string(),
+            content: content.to_string(),
+        };
+        let binding = VAULT.lock().unwrap();
+        let vault = binding.get().unwrap();
+        let result = note.create_note(vault);
         assert!(result.is_ok(), "❌ Note creation should succeed");
 
         // Read the note
-        let read_result = Note::read_note(TEST_VAULT, TEST_NOTE);
+        let file_name = Note::generate_file_name(&content);
+        let read_result = Note::read_note(vault, &file_name);
         assert!(read_result.is_ok(), "❌ Reading the note should succeed");
 
         // Verify the content
         let read_content = read_result.unwrap().trim().to_string();
         assert_eq!(read_content, expected_clean_content, "❌ Read content should match sanitized input");
 
-        cleanup();
+        cleanup(); // Ensure cleanup is called at the end of the test
     }
 
     #[test]
@@ -189,14 +252,21 @@ mod tests {
         setup();
 
         let md_content = "This note links to [[AnotherNote]] and [[TestNote]].";
-        let result = Note::create_note(TEST_VAULT, "test_note_links", md_content); // Use a unique title
+        let note = Note {
+            title: "test_note_links".to_string(),
+            content: md_content.to_string(),
+        };
+        let binding = VAULT.lock().unwrap();
+        let vault = binding.get().unwrap();
+        let result = note.create_note(vault);
         assert!(result.is_ok(), "❌ Creating note with links should succeed");
 
         // Read the note
-        let content = Note::read_note(TEST_VAULT, "test_note_links").unwrap();
+        let file_name = Note::generate_file_name(&md_content); // Use Note::generate_file_name
+        let content = Note::read_note(vault, &file_name).unwrap(); // Use Note::read_note
 
         // Extract links
-        let links = Note::extract_links(&content);
+        let links = markdown::extract_links(&content);
         assert!(!links.is_empty(), "❌ Extracting links should succeed");
 
         // Verify the extracted links
@@ -211,12 +281,18 @@ mod tests {
     fn test_render_html() {
         setup();
 
-        let md_content = "# Title\nThis is **bold**."; // Add a newline after the header
-        let result = Note::create_note(TEST_VAULT, "test_note_html", md_content);
+        let md_content = "# Title\n\nThis is **bold**.";
+        let note = Note {
+            title: "test_note_html".to_string(),
+            content: md_content.to_string(),
+        };
+        let binding = VAULT.lock().unwrap();
+        let vault = binding.get().unwrap();
+        let result = note.create_note(vault);
         assert!(result.is_ok(), "❌ Creating markdown note should succeed");
 
         // Render the note to HTML
-        let html_result = Note::render_html(TEST_VAULT, "test_note_html");
+        let html_result = note.render_html(vault);
         assert!(html_result.is_ok(), "❌ Rendering markdown to HTML should succeed");
 
         // Verify the rendered HTML
@@ -233,14 +309,57 @@ mod tests {
     fn test_delete_note() {
         setup();
 
-        let result = Note::create_note(TEST_VAULT, TEST_NOTE, "Test content");
+        let binding = VAULT.lock().unwrap();
+        let vault = binding.get().unwrap();
+
+        // Create a note
+        let note = Note {
+            title: TEST_NOTE.to_string(),
+            content: "Test content".to_string(),
+        };
+        let result = note.create_note(vault);
         assert!(result.is_ok(), "❌ Creating note should succeed");
 
-        let delete_result = Note::delete_note(TEST_VAULT, TEST_NOTE);
+        // Delete the note
+        let delete_result = note.delete_note(vault);
         assert!(delete_result.is_ok(), "❌ Deleting note should succeed");
 
-        let read_result = Note::read_note(TEST_VAULT, TEST_NOTE);
+        // Verify the note is deleted
+        let file_name = Note::generate_file_name(&note.content); // Use Note::generate_file_name
+        let read_result = Note::read_note(vault, &file_name); // Use Note::read_note
         assert!(read_result.is_err(), "❌ Reading a deleted note should fail");
+
+        cleanup();
+    }
+
+    #[test]
+    fn test_rename_note() {
+        setup();
+
+        let content = "This is a test note.";
+        let new_title = "Renamed Note";
+
+        // Create the note
+        let mut note = Note {
+            title: "Test Note".to_string(),
+            content: content.to_string(),
+        };
+        let binding = VAULT.lock().unwrap();
+        let vault = binding.get().unwrap();
+        note.create_note(vault).unwrap();
+
+        // Rename the note
+        note.rename_note(vault, new_title).unwrap();
+
+        // Verify the new file exists
+        let new_file_name = Note::generate_file_name(&content); // Use Note::generate_file_name
+        let new_file_path = format!("{}/{}.md", vault.path, new_file_name);
+        assert!(Path::new(&new_file_path).exists());
+
+        // Verify the old file no longer exists
+        let old_file_name = Note::generate_file_name(&content); // Use Note::generate_file_name
+        let old_file_path = format!("{}/{}.md", vault.path, old_file_name);
+        assert!(!Path::new(&old_file_path).exists());
 
         cleanup();
     }
