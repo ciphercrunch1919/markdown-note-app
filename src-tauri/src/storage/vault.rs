@@ -89,12 +89,19 @@ mod tests {
     const TEST_NOTE: &str = "TestNote"; 
 
     fn setup() {
-        let _ = file_operations::create_directory(TEST_BASE_PATH);
+        cleanup();
+        let base_path = Path::new(TEST_BASE_PATH);
+        let _ = file_operations::create_directory(base_path.to_str().unwrap());
     }
 
     fn cleanup() {
         if Path::new(TEST_BASE_PATH).exists() {
-            let _ = fs::remove_dir_all(TEST_BASE_PATH);
+            fs::read_dir(TEST_BASE_PATH).unwrap()
+                .for_each(|entry| {
+                    let path = entry.unwrap().path();
+                    fs::remove_dir_all(path).ok();
+                });
+            fs::remove_dir_all(TEST_BASE_PATH).ok();
         }
     }
 
@@ -107,7 +114,6 @@ mod tests {
         assert_eq!(vault.name, TEST_VAULT);
         assert!(Path::new(&vault.path).exists());
 
-        cleanup();
     }
 
     #[test]
@@ -115,7 +121,6 @@ mod tests {
         setup();
     
         let vault_path = "test_vaults/TestVault";
-        fs::create_dir_all(vault_path).unwrap(); // Ensure vault exists
     
         let note_path = format!("{}/TestNote.md", vault_path);
         let content = "This is a test note.";
@@ -124,7 +129,6 @@ mod tests {
     
         let indexed = Note::index_note_in_vault(&vault_path, "TestNote");
         assert!(indexed.is_ok(), "❌ Indexing note should succeed");
-    
-        cleanup();
+
     }    
 }
