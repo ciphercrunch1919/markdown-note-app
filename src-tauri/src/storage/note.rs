@@ -198,75 +198,49 @@ mod tests {
     static VAULT: Mutex<OnceLock<Vault>> = Mutex::new(OnceLock::new());
 
     fn setup() {
-        // Disable the base path for tests
-        file_operations::set_base_path(None);
-
-        // Clean up any existing test directory
         cleanup();
-
-        // Create the test directory
-        file_operations::create_directory(TEST_VAULT).unwrap();
-
-        // Create the Vault instance and store it in the static variable
-        let vault = Vault::create_vault(TEST_VAULT, TEST_VAULT).unwrap();
-        VAULT.lock().unwrap().get_or_init(|| vault.into());
+        fs::create_dir_all(TEST_VAULT).unwrap();
     }
 
     fn cleanup() {
-        if Path::new(TEST_VAULT).exists() {
-            file_operations::delete_directory(TEST_VAULT).unwrap();
-        }
+        fs::read_dir(TEST_VAULT).ok().and_then(|entries| {
+            for entry in entries {
+                fs::remove_file(entry.unwrap().path()).ok();
+            }
+            fs::remove_dir(TEST_VAULT).ok()
+        });
+        fs::remove_dir_all(TEST_VAULT).ok();
     }
 
     #[test]
     fn test_create_and_read_note() {
         setup();
 
+        let file_name = format!("{}_create", TEST_NOTE);
         let content = "This is a test note.";
         let expected_clean_content = "This is a test note.";
-
-        // Create the note
-        let note = Note {
-            title: TEST_NOTE.to_string(),
-            content: content.to_string(),
-        };
-        let binding = VAULT.lock().unwrap();
-        let vault = binding.get().unwrap();
-        let result = note.create_note(vault);
+        let result = Note::create_note(TEST_VAULT, &file_name, content);
         assert!(result.is_ok(), "❌ Note creation should succeed");
 
-        // Read the note
-        let file_name = Note::generate_file_name(&content);
-        let read_result = Note::read_note(vault, &file_name);
+        let read_result = Note::read_note(TEST_VAULT, &file_name);
         assert!(read_result.is_ok(), "❌ Reading the note should succeed");
 
         // Verify the content
         let read_content = read_result.unwrap().trim().to_string();
-        assert_eq!(read_content, expected_clean_content, "❌ Read content should match sanitized input");
-
-        cleanup(); // Ensure cleanup is called at the end of the test
+        assert_eq!(read_content, expected_clean_content, "❌ Read content should match sanitized input")
     }
 
     #[test]
     fn test_extract_links() {
         setup();
 
+        let file_name = format!("{}_extract", TEST_NOTE);
         let md_content = "This note links to [[AnotherNote]] and [[TestNote]].";
-        let note = Note {
-            title: "test_note_links".to_string(),
-            content: md_content.to_string(),
-        };
-        let binding = VAULT.lock().unwrap();
-        let vault = binding.get().unwrap();
-        let result = note.create_note(vault);
+        let result = Note::create_note(TEST_VAULT, &file_name, md_content);
         assert!(result.is_ok(), "❌ Creating note with links should succeed");
 
-        // Read the note
-        let file_name = Note::generate_file_name(&md_content); // Use Note::generate_file_name
-        let content = Note::read_note(vault, &file_name).unwrap(); // Use Note::read_note
-
-        // Extract links
-        let links = markdown::extract_links(&content);
+        let content = Note::read_note(TEST_VAULT, &file_name).unwrap();
+        let links = Note::extract_links(&content);
         assert!(!links.is_empty(), "❌ Extracting links should succeed");
 
         // Verify the extracted links
@@ -274,25 +248,17 @@ mod tests {
         println!("🔗 Extracted Links: {:?}", extracted_links);
         assert_eq!(extracted_links, vec!["AnotherNote", "TestNote"], "❌ Extracted links should match expected values");
 
-        cleanup();
     }
 
     #[test]
     fn test_render_html() {
         setup();
-
-        let md_content = "# Title\n\nThis is **bold**.";
-        let note = Note {
-            title: "test_note_html".to_string(),
-            content: md_content.to_string(),
-        };
-        let binding = VAULT.lock().unwrap();
-        let vault = binding.get().unwrap();
-        let result = note.create_note(vault);
+        let file_name = format!("{}_render", TEST_NOTE);
+        let md_content = "# Title\n This is **bold**.";
+        let result = Note::create_note(TEST_VAULT, &file_name, md_content);
         assert!(result.is_ok(), "❌ Creating markdown note should succeed");
 
-        // Render the note to HTML
-        let html_result = note.render_html(vault);
+        let html_result = Note::render_html(TEST_VAULT, &file_name);
         assert!(html_result.is_ok(), "❌ Rendering markdown to HTML should succeed");
 
         // Verify the rendered HTML
@@ -302,34 +268,21 @@ mod tests {
         assert!(html_content.contains("<h1>Title</h1>"), "❌ Markdown header should be converted");
         assert!(html_content.contains("<strong>bold</strong>"), "❌ Bold text should be formatted");
 
-        cleanup();
     }
 
     #[test]
     fn test_delete_note() {
         setup();
-
-        let binding = VAULT.lock().unwrap();
-        let vault = binding.get().unwrap();
-
-        // Create a note
-        let note = Note {
-            title: TEST_NOTE.to_string(),
-            content: "Test content".to_string(),
-        };
-        let result = note.create_note(vault);
+        let file_name = format!("{}_delete", TEST_NOTE);
+        let result = Note::create_note(TEST_VAULT, &file_name, "Test content");
         assert!(result.is_ok(), "❌ Creating note should succeed");
 
-        // Delete the note
-        let delete_result = note.delete_note(vault);
+        let delete_result = Note::delete_note(TEST_VAULT, &file_name);
         assert!(delete_result.is_ok(), "❌ Deleting note should succeed");
 
-        // Verify the note is deleted
-        let file_name = Note::generate_file_name(&note.content); // Use Note::generate_file_name
-        let read_result = Note::read_note(vault, &file_name); // Use Note::read_note
+        let read_result = Note::read_note(TEST_VAULT, &file_name);
         assert!(read_result.is_err(), "❌ Reading a deleted note should fail");
 
-        cleanup();
     }
 
     #[test]
