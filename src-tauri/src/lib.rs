@@ -16,8 +16,8 @@ struct NoteMetadata {
 }
 
 #[tauri::command]
-fn create_vault(vault: String, base_path: String) -> Result<(), String> {
-    vault::Vault::create_vault(&vault, &base_path)
+fn create_vault(vault: String) -> Result<(), String> {
+    vault::Vault::create_vault(&vault)
         .map(|_vault| ())
         .map_err(|e| e.to_string())
 }
@@ -28,8 +28,8 @@ fn list_vaults(base_path: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn create_note(vault: Vault, note: Note) -> Result<(), String> {
-    note.create_note(&vault).map_err(|e| e.to_string())
+fn create_note(mut vault: Vault, note: Note) -> Result<(), String> {
+    note.create_note(&mut vault).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -39,8 +39,8 @@ fn read_note(vault: Vault, title: String) -> Result<Note, String> {
 }
 
 #[tauri::command]
-fn delete_note(vault: Vault, note: Note) -> Result<(), String> {
-    note.delete_note(&vault).map_err(|e| e.to_string())
+fn delete_note(mut vault: Vault, note: Note) -> Result<(), String> {
+    note.delete_note(&mut vault).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -54,8 +54,8 @@ fn render_html(vault: Vault, note: Note) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn extract_links(vault_path: String, title: String) -> Result<Vec<String>, String> {
-    let vault = Vault::create_vault(&vault_path, "path/to/base").map_err(|e| e.to_string())?;
+fn extract_links(vault_name: String, title: String) -> Result<Vec<String>, String> {
+    let vault = Vault::create_vault(&vault_name).map_err(|e| e.to_string())?;
     let content = note::Note::read_note(&vault, &title).map_err(|e| e.to_string())?;
     Ok(markdown::extract_links(&content))
 }
@@ -67,18 +67,8 @@ fn extract_plain_text(content: String) -> Result<String, String> {
 
 #[tauri::command]
 fn delete_vault(vault: String) -> Result<(), String> {
-    let vault = Vault::create_vault(&vault, "path/to/base").map_err(|e| e.to_string())?;
+    let vault = Vault::create_vault(&vault).map_err(|e| e.to_string())?;
     vault.delete_vault().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn index_note(vault: Vault, title: String, content: String) -> Result<(), String> {
-    vault.index_note(&title, &content).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn delete_note_index(vault: Vault, title: String) -> Result<(), String> {
-    vault.delete_note_index(&title).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -112,8 +102,6 @@ pub fn run() {
             extract_links,
             extract_plain_text,
             delete_vault,
-            index_note,
-            delete_note_index,
             parse_markdown_content,
         ])
         .run(tauri::generate_context!())

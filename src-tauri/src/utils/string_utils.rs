@@ -7,6 +7,7 @@ pub fn sanitize_filename(name: &str) -> String {
 }
 
 // Trims and normalizes whitespace in a string.
+#[allow(dead_code)]
 pub fn normalize_whitespace(input: &str) -> String {
     let re = Regex::new(r"\s+").unwrap();
     re.replace_all(input.trim(), " ").to_string()
